@@ -1,0 +1,7 @@
+{
+  "api_token": "12345$0123456789abcdef0123456789abcdef0123456789abcdef",
+  "base_url": "https://api.edgecenter.ru",
+  "project_id": null,
+  "client_id": null,
+  "readonly": false
+}

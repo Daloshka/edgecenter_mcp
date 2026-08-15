@@ -1,0 +1,26 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Lint
+        run: uvx ruff check .
+
+      - name: Format check
+        run: uvx ruff format --check .
+
+      - name: Start the server and list its tools
+        # No credentials here: the server must boot and advertise its tools
+        # without ever touching the API.
+        run: uv run --script .github/workflows/list_tools.py

@@ -1,0 +1,25 @@
+# secrets — never commit
+config.json
+*.token
+*.jwt
+*.apikey
+.env
+.env.*
+
+# account data collected from a live account
+inventory/
+*.inventory.json
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# editors / os
+.idea/
+.vscode/
+.DS_Store
