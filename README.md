@@ -90,6 +90,37 @@ with *"jwt decode failed"* — a common hour-waster.
 > token and you get `401` on everything. Use single quotes, or read the token
 > from the config file.
 
+## DCImanager (optional)
+
+EdgeCenter sells bare dedicated servers through a completely separate account
+and panel — [DCImanager](https://nx-dci.edgecenter.ru), an ISPsystem product —
+which the Cloud API above cannot see at all. If you have dedicated hardware,
+`dedicated_servers()` reaches it through the panel's own API; if you don't,
+ignore this section — every other tool works without it.
+
+Credentials are whatever came in the provisioning email for the panel (not
+your EdgeCenter account login):
+
+```json
+{
+  "api_token": "...",
+  "dci_username": "...",
+  "dci_password": "..."
+}
+```
+
+or `DCIMANAGER_USERNAME` / `DCIMANAGER_PASSWORD` as environment variables.
+
+The panel authenticates with a short-lived session id (`func=auth`) rather
+than a bearer token, and re-logs in on every call — cheap, and the panel
+tolerates it fine since hardware inventory changes slowly (the tool caches
+results for 5 minutes; `refresh=True` bypasses that).
+
+It only exposes inventory: hostname, IP, rack, temperature, port speed, MAC.
+No price, no console, no power control — DCImanager nodes are outside the
+scope of `costs()`, `console()`, `metrics()` and `server_action()`, which all
+talk to the Cloud API and don't know these nodes exist.
+
 ## Configuration
 
 Environment variables win over the config file. The file is looked up at
@@ -102,6 +133,9 @@ Environment variables win over the config file. The file is looked up at
 | `project_id` | `EDGECENTER_PROJECT_ID` | optional; with several projects the first one is used, so set this to pick another (`whoami()` lists them) |
 | `client_id` | `EDGECENTER_CLIENT_ID` | optional; read from `/iam/users/me` when absent |
 | `readonly` | `EDGECENTER_MCP_READONLY=1` | refuse every mutating call |
+| `dci_username` | `DCIMANAGER_USERNAME` | optional, see [DCImanager](#dcimanager-optional) below |
+| `dci_password` | `DCIMANAGER_PASSWORD` | optional, see [DCImanager](#dcimanager-optional) below |
+| `dci_base_url` | `DCIMANAGER_BASE_URL` | defaults to `https://nx-dci.edgecenter.ru/dcimgr` |
 
 ## Tools
 
@@ -122,6 +156,7 @@ Read-only — safe to call at any time:
 | `ssh_keys()` | keypairs, per region or across all of them |
 | `images(region_id)` | available OS images, baremetal or virtual |
 | `api_tokens()` | issued API tokens and when each was last used |
+| `dedicated_servers(query)` | optional, see [DCImanager](#dcimanager-optional) below |
 
 Mutating — refused unless `confirm=True`, and always refused in read-only mode:
 

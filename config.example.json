@@ -3,5 +3,7 @@
   "base_url": "https://api.edgecenter.ru",
   "project_id": null,
   "client_id": null,
-  "readonly": false
+  "readonly": false,
+  "dci_username": null,
+  "dci_password": null
 }

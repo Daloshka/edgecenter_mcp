@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- New optional tool `dedicated_servers()`: inventory from DCImanager
+  (nx-dci.edgecenter.ru), the separate ISPsystem panel for bare dedicated
+  hardware that the Cloud API cannot see. Needs its own credentials
+  (`dci_username`/`dci_password` or `DCIMANAGER_USERNAME`/
+  `DCIMANAGER_PASSWORD`); returns an explanatory message instead of an error
+  when unconfigured, so every existing tool is unaffected.
+- Session-based auth against the panel (`func=auth`), 5-minute inventory
+  cache — hardware inventory changes slowly.
+- `whoami()` now reports `dcimanager_configured`.
+
 ## 1.0.0
 
 First public release.

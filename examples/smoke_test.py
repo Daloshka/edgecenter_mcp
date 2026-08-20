@@ -73,6 +73,8 @@ async def main() -> None:
         await call(session, "fleet_health", {})
         await call(session, "tasks", {"limit": 5})
         await call(session, "api_tokens", {})
+        # optional: prints an explanatory message when DCImanager creds are absent
+        await call(session, "dedicated_servers", {})
 
         # guardrails: both must be refused
         if target:

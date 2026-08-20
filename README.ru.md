@@ -91,6 +91,37 @@ curl -X POST "https://api.edgecenter.ru/iam/clients/<CLIENT_ID>/tokens" \
 > вы получаете `401` на всё подряд. Используйте одинарные кавычки или читайте
 > токен из файла конфигурации.
 
+## DCImanager (опционально)
+
+EdgeCenter продаёт голые dedicated-серверы через отдельный аккаунт и панель —
+[DCImanager](https://nx-dci.edgecenter.ru), продукт ISPsystem, — которую Cloud
+API выше вообще не видит. Если у вас есть dedicated-железо, `dedicated_servers()`
+достаёт его через API самой панели; если нет — пропустите этот раздел, всё
+остальное работает и без него.
+
+Креды — те, что пришли в письме провижининга панели (не логин от аккаунта
+EdgeCenter):
+
+```json
+{
+  "api_token": "...",
+  "dci_username": "...",
+  "dci_password": "..."
+}
+```
+
+или переменные окружения `DCIMANAGER_USERNAME` / `DCIMANAGER_PASSWORD`.
+
+Панель авторизует по недолгоживущей сессии (`func=auth`), а не по bearer-
+токену, и логинится заново на каждый вызов — дёшево, панель это переживает
+нормально, парк железа меняется медленно (инструмент кэширует результат на
+5 минут; `refresh=True` сбрасывает кэш).
+
+Отдаёт только инвентарь: hostname, IP, стойку, температуру, скорость порта,
+MAC. Ни цены, ни консоли, ни управления питанием — ноды DCImanager вне
+области `costs()`, `console()`, `metrics()` и `server_action()`, которые
+говорят с Cloud API и об этих нодах не знают вообще.
+
 ## Конфигурация
 
 Переменные окружения приоритетнее файла. Файл ищется по пути
@@ -103,6 +134,9 @@ curl -X POST "https://api.edgecenter.ru/iam/clients/<CLIENT_ID>/tokens" \
 | `project_id` | `EDGECENTER_PROJECT_ID` | необязателен; если проектов несколько, берётся первый — укажите явно, чтобы выбрать другой (список даёт `whoami()`) |
 | `client_id` | `EDGECENTER_CLIENT_ID` | необязателен, берётся из `/iam/users/me` |
 | `readonly` | `EDGECENTER_MCP_READONLY=1` | отклонять любые изменения |
+| `dci_username` | `DCIMANAGER_USERNAME` | необязателен, см. [DCImanager](#dcimanager-опционально) выше |
+| `dci_password` | `DCIMANAGER_PASSWORD` | необязателен, см. [DCImanager](#dcimanager-опционально) выше |
+| `dci_base_url` | `DCIMANAGER_BASE_URL` | по умолчанию `https://nx-dci.edgecenter.ru/dcimgr` |
 
 ## Инструменты
 
@@ -123,6 +157,7 @@ curl -X POST "https://api.edgecenter.ru/iam/clients/<CLIENT_ID>/tokens" \
 | `ssh_keys()` | SSH-ключи по региону или по всем сразу |
 | `images(region_id)` | доступные образы ОС, baremetal или виртуальные |
 | `api_tokens()` | выпущенные API-токены и дата последнего использования |
+| `dedicated_servers(query)` | опционально, см. [DCImanager](#dcimanager-опционально) выше |
 
 Изменяющие — отклоняются без `confirm=True` и всегда в режиме read-only:
 

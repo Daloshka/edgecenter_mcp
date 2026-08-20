@@ -1,6 +1,6 @@
 [project]
 name = "edgecenter_mcp"
-version = "1.0.0"
+version = "1.1.0"
 description = "MCP server for the EdgeCenter Cloud API: fleet inventory, pricing, consoles and power control"
 readme = "README.md"
 requires-python = ">=3.11"

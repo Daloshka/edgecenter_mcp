@@ -36,12 +36,14 @@ import httpx
 from mcp.server import MCPServer
 from mcp.types import ToolAnnotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 DEFAULT_CONFIG_PATHS = (
     "~/.config/edgecenter_mcp/config.json",
     "~/.config/edgecenter-mcp/config.json",  # legacy layout
 )
+
+DCI_DEFAULT_BASE_URL = "https://nx-dci.edgecenter.ru/dcimgr"
 
 
 def _config_path() -> Path:
@@ -113,12 +115,27 @@ def _load_config() -> dict[str, Any]:
         cfg["base_url"] = env["EDGECENTER_BASE_URL"]
     if env.get("EDGECENTER_MCP_READONLY", "").lower() in ("1", "true", "yes"):
         cfg["readonly"] = True
+    # DCImanager (nx-dci.edgecenter.ru) is a separate ISPsystem panel for
+    # dedicated/baremetal-outside-the-cloud-API hardware; entirely optional,
+    # the cloud tools above work fine without it.
+    if env.get("DCIMANAGER_USERNAME"):
+        cfg["dci_username"] = env["DCIMANAGER_USERNAME"]
+    if env.get("DCIMANAGER_PASSWORD"):
+        cfg["dci_password"] = env["DCIMANAGER_PASSWORD"]
+    if env.get("DCIMANAGER_BASE_URL"):
+        cfg["dci_base_url"] = env["DCIMANAGER_BASE_URL"]
     return cfg
 
 
 CONFIG = _load_config()
 BASE_URL = CONFIG.get("base_url") or DEFAULT_BASE_URL
 READONLY = bool(CONFIG.get("readonly"))
+DCI_BASE_URL = CONFIG.get("dci_base_url") or DCI_DEFAULT_BASE_URL
+DCI_INVENTORY_TTL = 300.0  # rack hardware changes slowly — no need to hammer the panel
+
+
+def _dci_configured() -> bool:
+    return bool(CONFIG.get("dci_username") and CONFIG.get("dci_password"))
 
 
 def _auth_header(token: str) -> str:
@@ -435,6 +452,84 @@ async def _resolve(query: str, refresh: bool = False) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# DCImanager (optional) — dedicated hardware in a separate ISPsystem panel,
+# invisible to the cloud API used by everything above. Session-based auth
+# (func=auth issues a short-lived id), no bearer token, no shared client:
+# a fresh login per poll is cheap and the panel tolerates it fine.
+# --------------------------------------------------------------------------- #
+def _dci_val(elem: dict[str, Any], key: str) -> str:
+    return ((elem.get(key) or {}).get("$") or "").strip()
+
+
+async def _dci_call(client: httpx.AsyncClient, **params: Any) -> dict[str, Any]:
+    try:
+        resp = await client.get(DCI_BASE_URL, params={**params, "out": "xjson"})
+    except (httpx.TimeoutException, httpx.TransportError) as exc:
+        raise ECError(f"DCImanager unreachable: {exc}") from exc
+    if resp.status_code >= 400:
+        raise ECError(f"DCImanager {resp.status_code} on func={params.get('func')}")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise ECError(f"DCImanager returned non-JSON for func={params.get('func')}") from exc
+
+
+def _dci_port_mbit(traff: str) -> float | None:
+    """'930 Mbit/s' -> 930.0; DCImanager's own unit, not bytes."""
+    try:
+        val, unit = traff.split()
+        return float(val) * {"Kbit/s": 0.001, "Mbit/s": 1.0, "Gbit/s": 1000.0}[unit]
+    except (ValueError, KeyError):
+        return None
+
+
+async def _dci_inventory(refresh: bool = False) -> list[dict[str, Any]]:
+    if not _dci_configured():
+        raise ECError(
+            "DCImanager is not configured (this is optional). Set dci_username/"
+            "dci_password in the config file, or DCIMANAGER_USERNAME/"
+            "DCIMANAGER_PASSWORD — see README § DCImanager (optional)."
+        )
+    if not refresh:
+        cached = _cache_get("dci_inventory", DCI_INVENTORY_TTL)
+        if cached is not None:
+            return cached
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0)) as client:
+        auth = await _dci_call(
+            client,
+            func="auth",
+            username=CONFIG["dci_username"],
+            password=CONFIG["dci_password"],
+        )
+        session = ((auth.get("doc") or {}).get("auth") or {}).get("$id")
+        if not session:
+            raise ECError(f"DCImanager login failed: {_dump(auth, limit=400)}")
+        data = await _dci_call(client, auth=session, func="server")
+
+    nodes = []
+    for elem in (data.get("doc") or {}).get("elem", []) or []:
+        ip = _dci_val(elem, "ip")
+        if not ip:
+            continue
+        nodes.append(
+            {
+                "panel_id": _dci_val(elem, "id"),
+                "serial": _dci_val(elem, "name"),
+                "hostname": _dci_val(elem, "hostname"),
+                "ip": ip,
+                "os": _dci_val(elem, "os"),
+                "rack": _dci_val(elem, "rack"),
+                "temperature_c": _dci_val(elem, "temperature") or None,
+                "port_mbit": _dci_port_mbit(_dci_val(elem, "traff")),
+                "mac": _dci_val(elem, "mac"),
+            }
+        )
+    nodes.sort(key=lambda n: n["ip"])
+    return _cache_put("dci_inventory", nodes)
+
+
+# --------------------------------------------------------------------------- #
 # formatting
 # --------------------------------------------------------------------------- #
 def _dump(obj: Any, limit: int = MAX_OUTPUT_CHARS) -> str:
@@ -482,6 +577,9 @@ mcp = MCPServer(
         "The API does NOT expose quotas, balance or invoices — those live in the web "
         "panel only.\n"
         "Anything not covered by a named tool is reachable through api_request().\n"
+        "dedicated_servers() optionally covers DCImanager, a separate panel for "
+        "dedicated hardware the cloud API above cannot see at all; it needs its own "
+        "credentials and degrades to an explanatory message when unconfigured.\n"
         "Every mutation (power actions, POST/DELETE) requires confirm=True and must "
         "be agreed with the user first."
     ),
@@ -509,6 +607,7 @@ async def whoami() -> str:
         "auth_scheme": _auth_header(token).split(" ")[0] if token else "no token",
         "readonly_mode": READONLY,
         "config_file": str(CONFIG_PATH),
+        "dcimanager_configured": _dci_configured(),
     }
     if isinstance(user, dict):
         out["user"] = {
@@ -1037,6 +1136,59 @@ async def api_tokens() -> str:
             for t in items
         ]
     )
+
+
+@mcp.tool(
+    annotations=RO,
+    description=(
+        "OPTIONAL: dedicated hardware from DCImanager, a separate ISPsystem panel "
+        "(nx-dci.edgecenter.ru) that the EdgeCenter Cloud API used by every other "
+        "tool cannot see at all — a different account/billing track for bare "
+        "dedicated servers. Needs its own credentials (dci_username/dci_password "
+        "or DCIMANAGER_USERNAME/DCIMANAGER_PASSWORD); without them this returns an "
+        "explanatory message instead of failing. The panel exposes inventory only "
+        "— no price, no console, no power control, so console()/server_action()/"
+        "costs() do not apply to these nodes.\n"
+        "query filters by substring on ip, hostname or serial."
+    ),
+)
+async def dedicated_servers(query: str | None = None, refresh: bool = False, raw: bool = False) -> str:
+    if not _dci_configured():
+        return (
+            "DCImanager is not configured for this account — this is optional, "
+            "every other tool works fine without it.\n"
+            "To enable: set dci_username and dci_password in the config file "
+            "(same file as api_token), or export DCIMANAGER_USERNAME and "
+            "DCIMANAGER_PASSWORD. See README § DCImanager (optional)."
+        )
+    nodes = await _dci_inventory(refresh=refresh)
+    if query:
+        q = query.strip().lower()
+        nodes = [
+            n
+            for n in nodes
+            if q in n["ip"] or q in (n["hostname"] or "").lower() or q in (n["serial"] or "").lower()
+        ]
+    if not nodes:
+        return "Nothing matched (check the filter, or retry with refresh=True)."
+    if raw:
+        return _dump(nodes)
+
+    rows = [
+        [
+            n["hostname"] or n["serial"] or "-",
+            n["ip"],
+            n["os"] or "-",
+            n["rack"] or "-",
+            f"{n['temperature_c']}°C" if n["temperature_c"] else "-",
+            f"{n['port_mbit']:.0f} Mbit/s" if n["port_mbit"] is not None else "-",
+            n["mac"] or "-",
+            n["panel_id"] or "-",
+        ]
+        for n in nodes
+    ]
+    table = _table(rows, ["host/serial", "ip", "os", "rack", "temp", "port", "mac", "panel_id"])
+    return f"{table}\n\ntotal: {len(nodes)}"
 
 
 @mcp.tool(
